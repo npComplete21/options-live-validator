@@ -302,7 +302,7 @@ Positions never survive the session. This materially simplifies resumability
 trial, evaluated against: real OPRA bid/ask **with sizes**; snapshot cadence
 and rate limits; multi-leg 0DTE order support; documented paper fill engine.
 If the paper tier turns out to serve indicative or delayed quotes, it cannot
-measure spreads and the paid feed decision reopens immediately (§13.4).
+measure spreads and the paid feed decision reopens immediately (§14.4).
 
 **Greeks and IV are computed here**, from the real mid via backtest-lab's
 pricer — never taken from the vendor, whose IV embeds a vendor's rate,
@@ -316,7 +316,7 @@ premium), both rights. Roughly 100–200 contracts.
 **Cadence:** 1s for strikes with an open position, 5s for the rest of the
 band. Session volume ≈ 200 contracts × ~2,000 samples ≈ 400k rows/day —
 trivially small, which is worth stating explicitly before anyone sizes
-infrastructure for it (§13.1).
+infrastructure for it (§14.1).
 
 **Hygiene gate unchanged from v1 §5.3** — crossed/locked, zero bid, stale
 timestamp, absurd width, underlying/option timestamp skew. Rejections are
@@ -347,7 +347,90 @@ spread eats it", that is a *useful* result and it points at execution
 
 ---
 
-## 11. State, archive, and resumability
+## 11. Kafka topology — and the subtlety that decides it
+
+Kafka stays because **operating it is a goal of the project**, not because the
+throughput demands it (§14.1). That makes the design question sharper rather
+than softer: a single-partition topic with one consumer would technically
+satisfy `CLAUDE.md` while teaching nothing. The topology below is chosen to
+exercise the parts that actually matter — keys and partitions, consumer
+groups, manual offset control, retention versus archival, and replay.
+
+### The ordering problem that shapes everything
+
+The obvious design is one topic, `quotes.QQQ`, keyed by OCC contract symbol.
+Keying by contract is correct for what it guarantees: every quote for a given
+contract lands in one partition, so per-contract ordering holds.
+
+But Kafka orders messages **only within a partition**. Spread ~200 contracts
+across partitions and a consumer sees them interleaved with no global order —
+while a strategy decision needs a *coherent snapshot of the whole chain at one
+instant*, not a stream of unordered per-contract updates. Reconstructing
+snapshots downstream means event-time windowing with a watermark and a
+late-arrival policy: real streaming work, and a rich source of subtle bugs.
+
+So: two topics, each keyed for what it must guarantee.
+
+| Topic | Key | Partitions | Consumed by | Guarantee |
+|---|---|---|---|---|
+| `quotes.QQQ` | OCC contract symbol | 6 | archiver, surface/residual jobs | per-contract ordering; parallel consumption |
+| `chain.QQQ` | ticker (single key) | 1 | the five strategy consumers | **total ordering of whole-chain snapshots** |
+
+One `chain.QQQ` message is one complete band snapshot at one instant — ~200
+contracts, ~20–30 KB, comfortably inside the 1 MB default. A single partition
+costs nothing at this volume and buys strict global ordering, which is exactly
+the guarantee a trading decision requires.
+
+This is the fine-grained-events + materialised-snapshot pattern, and carrying
+both makes the tradeoff concrete rather than theoretical: the same data, keyed
+two ways, with different ordering guarantees and different consumers.
+
+### Consumer groups are the tournament
+
+Each strategy is its own consumer group on `chain.QQQ`. All five see every
+snapshot independently; one falling behind or crashing does not affect the
+others; each keeps its own offsets. That is precisely what consumer groups
+are for, and it is why the tournament is a genuine fit for Kafka rather than
+a contrivance built to justify it.
+
+### Offsets — the one lesson worth the whole exercise
+
+`enable.auto.commit=false`, always. Auto-commit is the most common source of
+correctness bugs in Kafka applications, and here it breaks the system
+silently: consume a snapshot → open a position → crash before the commit →
+the snapshot is redelivered → **the position opens twice.**
+
+The fix, per §12: the consumed offset is written **inside the same DynamoDB
+transaction** as the state mutation it caused, and on startup the consumer
+`seek()`s to the stored offset instead of trusting the broker's committed
+one. Kafka's own commit becomes a monitoring signal, not the source of truth.
+
+### Retention versus archival
+
+`quotes.*` and `chain.*` retain 7 days — enough to replay a week of sessions
+straight from the log. Permanent history is the archiver's Parquet (§12),
+because **Kafka is a buffer, not a database.** Building that split
+deliberately is worthwhile: it is the distinction most often gotten wrong.
+
+Replay from a Parquet recording and replay from a Kafka offset must drive the
+**same** engine, so a strategy change can be re-run either way and produce
+identical results.
+
+### Local development
+
+Single-broker **KRaft** (no ZooKeeper — removed in Kafka 4.x) via docker
+compose, mirroring the single-broker EC2 target in `CLAUDE.md`. MSK Serverless
+only once the setup is proven, also per `CLAUDE.md`.
+
+### Client
+
+`confluent-kafka` (librdkafka) rather than the `kafka-python` currently in
+`requirements.txt` — it is the industry-standard client, actively maintained,
+and the one worth learning. Reverting is a one-line change if you would rather
+read pure Python.
+
+---
+## 12. State, archive, and resumability
 
 DynamoDB as the operational store, single table keyed by run, per v1 §8 —
 with the **transactional offset-with-state** rule retained: the consumed feed
@@ -371,7 +454,7 @@ replay needs no translation layer.
 
 ---
 
-## 12. Reporting
+## 13. Reporting
 
 **A. Tournament scorecard (daily, primary).** Per strategy: win rate `p`,
 average win `w`, average loss `L`, **realised `L/w` against the `L_max`
@@ -393,16 +476,15 @@ marker (§6).
 
 ---
 
-## 13. Open decisions
+## 14. Open decisions
 
-1. **Kafka — learning goal or technical requirement?** `CLAUDE.md` specifies
-   it, but §9's volume is ~400k rows/day, which one process handles trivially,
-   and deterministic replay is available from the recorded Parquet directly.
-   The honest engineering answer is that Kafka is not needed before Phase 5.
-   **But [[feedback-challenge-inherited-defaults]] says to ask which it is
-   rather than recommend removal** — if operating Kafka is a thing you want to
-   learn here, it stays and the tournament fan-out is a genuinely good use of
-   consumer groups. Your call, and it is the only question blocking Phase 0.
+1. **Kafka — RESOLVED 2026-09-08: a learning requirement, so it stays.**
+   §9's volume (~400k rows/day) does not need it and deterministic replay is
+   available from Parquet directly, so this is explicitly a learning goal
+   rather than a throughput one — recorded here so nobody later "optimises"
+   it away as dead weight. Topology in §11 is therefore designed to exercise
+   partitioning, consumer groups and manual offset control rather than to be
+   minimal. Kafka now enters at Phase 1, not Phase 5.
 2. **Snapshot cadence** — 1s/5s as proposed, or finer? Finer costs nothing in
    storage and cannot be recovered retroactively.
 3. **Entry time** — fixed 09:45, or swept across the session? Entry timing is
@@ -414,12 +496,12 @@ marker (§6).
 
 ---
 
-## 14. Build order
+## 15. Build order
 
 | Phase | Deliverable | Gate |
 |---|---|---|
-| 0 | config, mode guard (v1 §4), capital model, DSL loader reusing backtest-lab's | guard tests pass incl. every mis-configuration case |
-| 1 | **the recorder** — QQQ 0DTE chain to Parquet, hygiene gate, no orders, no strategies | a full clean session on disk; rejection rates sane |
+| 0 | config, mode guard (v1 §4), capital model, τ clock, DSL loader reusing backtest-lab's, **local KRaft Kafka + topic provisioning** | guard tests pass incl. every mis-configuration case; broker up, topics created with the §11 keys and partition counts |
+| 1 | **the recorder** — feed → `quotes.QQQ` + `chain.QQQ` producer, hygiene gate, archiver consumer → Parquet. No orders, no strategies | a full clean session on disk *through Kafka*; rejection rates sane; archiver survives a broker restart |
 | 2 | IV/greeks via the shared pricer; τ-clock calibration; intraday vol curve; report C | reproduces vendor greeks to a stated tolerance; clock chosen on measured data |
 | 3 | **offline tournament** — replay recordings through all five strategies with conservative fills | five strategies, zero engine changes between them; one day hand-checked |
 | 4 | live paper loop (same engine, live feed), state store, restart test | kill mid-session, restart, no lost or duplicated position |
@@ -431,13 +513,14 @@ data, with no broker account and no waiting for live sessions. The same engine
 serves replay and live, which is the deterministic-replay property that makes
 strategy changes testable without spending another quarter of real time.
 
-Phases 0–3 need no Kafka, no DynamoDB, no broker credentials, and no paid
-data. Phase 1 should start immediately regardless of every other open
-question, because the dataset only accumulates forward (§0).
+Phases 0–3 need no DynamoDB, no broker credentials and no paid data — Kafka
+runs locally in docker throughout. Phase 1 should start immediately regardless
+of every other open question, because the dataset only accumulates forward
+(§0).
 
 ---
 
-## 15. Dependencies
+## 16. Dependencies
 
 - `options-backtest-lab @ git+https://github.com/npComplete21/options-backtest-lab@<tag>`
   — the pricer and the strategy DSL. Its `pyproject.toml` is already published
@@ -449,5 +532,6 @@ question, because the dataset only accumulates forward (§0).
   session boundaries are identical by construction
 - broker SDK — pending §13.4
 - `pytest`, `pytest-cov`, `ruff`
-- Kafka client only if §13.1 says so; `confluent-kafka` over the thinly
-  maintained `kafka-python` if it stays
+- `confluent-kafka` — replaces the `kafka-python` in `requirements.txt` (§11)
+- Kafka itself runs locally via docker compose in KRaft mode; no Java or
+  ZooKeeper install needed on the host
