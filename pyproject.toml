@@ -1,0 +1,43 @@
+[project]
+name = "options-live-validator"
+version = "0.1.0"
+description = "Streaming paper-trading validator and 0DTE chain recorder for QQQ options strategies"
+requires-python = ">=3.11"
+# No pricing math lives in this repo (docs/IMPLEMENTATION_PLAN.md section 14).
+# The Black-Scholes module and strategy DSL are imported from
+# options-backtest-lab; that dependency is added at Phase 2, when the first
+# code needs to back out IV. Phase 0-1 deliberately do not need it.
+dependencies = [
+    "confluent-kafka",          # section 11: industry-standard client, replaces kafka-python
+    "polars",                   # matches backtest-lab's stack
+    "pyarrow",                  # Parquet archive
+    "duckdb",                   # analytical queries over the archive
+    "pydantic>=2",
+    "pydantic-settings>=2",
+    "pyyaml",
+    "pandas_market_calendars",  # session boundaries identical to backtest-lab
+    "python-dotenv",
+    "boto3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov", "ruff"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = ["integration: requires a running Kafka broker (docker compose up -d)"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
