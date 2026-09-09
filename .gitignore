@@ -3,3 +3,12 @@ __pycache__/
 .venv/
 .env
 *.log
+
+# OS / editor
+.DS_Store
+
+# Claude Code local state (worktrees are local checkouts, never committed)
+.claude/worktrees/
+
+# Local event archives / recorded quote sessions (these belong in S3)
+data/
