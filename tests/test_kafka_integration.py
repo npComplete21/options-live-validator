@@ -14,6 +14,7 @@ That claim is worth verifying against the real thing rather than trusting.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import uuid
 
@@ -49,13 +50,30 @@ def require_broker():
 
 @pytest.fixture(scope="module")
 def provisioned():
-    assert provision("QQQ", DEFAULT_BOOTSTRAP) == 0
-    return quotes_topic("QQQ").name, chain_topic("QQQ").name
+    """A throwaway ticker, torn down afterwards.
+
+    These tests publish deliberately junk payloads to exercise partitioning, so
+    they must never touch the real `quotes.QQQ` -- a malformed message left on
+    a production topic is a landmine for the archiver, which is exactly how
+    this fixture came to exist.
+    """
+    name = f"ZZ{uuid.uuid4().hex[:6].upper()}"
+    assert provision(name, DEFAULT_BOOTSTRAP) == 0
+    yield quotes_topic(name).name, chain_topic(name).name
+
+    from confluent_kafka.admin import AdminClient
+
+    admin = AdminClient({"bootstrap.servers": DEFAULT_BOOTSTRAP})
+    for future in admin.delete_topics([quotes_topic(name).name, chain_topic(name).name]).values():
+        with contextlib.suppress(Exception):
+            future.result(timeout=30)
 
 
 def test_provisioning_is_idempotent(provisioned):
     """Re-running against existing topics must be a no-op, not an error."""
-    assert provision("QQQ", DEFAULT_BOOTSTRAP) == 0
+    quotes, _ = provisioned
+    ticker = quotes.split(".", 1)[1]
+    assert provision(ticker, DEFAULT_BOOTSTRAP) == 0
 
 
 def test_same_contract_always_lands_in_one_partition(provisioned):

@@ -44,7 +44,12 @@ flag loudly, not assume.
   Manager — never hardcoded, never committed.
 - Every strategy run is tagged with the backtest `run_id` it corresponds to.
 - Paper vs. live mode must be an explicit, impossible-to-miss config flag,
-  defaulting to paper.
+  defaulting to paper. As implemented in `src/olv/common/mode.py`: an enum,
+  never a bool; `resolve_endpoint()` is the only thing permitted to construct
+  a broker base URL, so it cannot be set independently of the mode; and **no
+  production hostname is committed to this repo** — the paper host is a
+  literal, the live host must come from the environment and has no default.
+  A test greps `src/` to keep that true, so never add a live URL literal.
 
 ## Out of scope for this repo
 - Historical backtesting / synthetic option pricing → that's
