@@ -45,6 +45,28 @@ src/olv/
 
 ## Status
 
-Phase 0 complete: execution-mode guard, τ clock, run identifiers, Kafka
-topology and provisioning, local broker. Phase 1 (the recorder) is next; see
-section 15 of the plan for the build order and gates.
+**Phase 0** — execution-mode guard, τ clock, run identifiers, Kafka topology
+and provisioning, local broker.
+
+**Phase 1** — the recorder: 0DTE watch set, quote hygiene gate, Kafka producer
+into both topics, and the Parquet archiver. Runs end to end today against a
+synthetic feed:
+
+```bash
+make kafka-up && make topics
+.venv/bin/python -m olv.record --snapshots 8 --interval 0 --defect-rate 0.08
+```
+
+The vendor client is the one remaining piece, and it is deliberately the last:
+everything downstream of `olv.feed.client.QuoteFeed` is vendor-independent, so
+a broker drops in as a single class once a paper account exists. Until then the
+synthetic feed exercises the whole path — including the crossed markets, absent
+bids and stale prints a real feed produces only occasionally and never on
+demand.
+
+Every row is stamped `feed_source`, so synthetic data is self-identifying in
+storage forever and cannot be mistaken for an observed session.
+
+**Next**: Phase 2 — implied vol and greeks from the recorded mid via
+backtest-lab's pricer, τ-clock calibration, and the first assumption report.
+See section 15 of the plan for the gates.
