@@ -147,9 +147,31 @@ substituted once it exists. This is a genuine chicken-and-egg: the right
 clock is only knowable after recording, which is another reason recording
 leads the build order.
 
-**Hard requirement:** whatever clock is chosen must be identical in
-backtest-lab and here, or no live-vs-backtest comparison means anything. It
-belongs in the shared package, not in either repo's config.
+**Hard requirement — SATISFIED 2026-09-09.** Whatever clock is chosen must be
+identical in backtest-lab and here, or no live-vs-backtest comparison means
+anything. It belongs in the shared package, not in either repo's config.
+
+The clock had in fact forked: both repos wrote one independently, each
+describing itself as the extraction point for the shared package. They were
+complementary rather than rival — backtest-lab's was date-resolution and
+explicitly *refused* 0DTE, this repo's counted real session seconds and was the
+implementation that refusal was waiting for — so they were merged rather than
+one being chosen.
+
+**This repo no longer owns a clock.** It lives in `obl.timebase`, pinned by tag
+in `pyproject.toml`. What stays here is `olv.common.sessions.SessionCalendar`,
+our implementation of the shared clock's `SessionSource` protocol: the clock is
+pure-stdlib by design and takes sessions injected, so it never pulls
+`pandas_market_calendars` behind it. `tests/test_shared_clock.py` is the
+conformance test — the shared package pins the 2.31x ratio against synthetic
+sessions, ours pins it against the real exchange calendar.
+
+One deliberate behaviour change came with the merge: an expiry in the past now
+returns tau `0.0` rather than raising. A clock is a pure function of two
+instants, and backtest-lab needs zero for contracts that have rolled off a
+chain. The guard moved rather than vanished — an expired contract reaching a
+live decision is a *selection* bug, caught where contracts are chosen, and
+`clock_ratio` still refuses a degenerate denominator.
 
 ### Delta instability near the close
 
@@ -522,10 +544,19 @@ of every other open question, because the dataset only accumulates forward
 
 ## 16. Dependencies
 
-- `options-backtest-lab @ git+https://github.com/npComplete21/options-backtest-lab@<tag>`
-  — the pricer and the strategy DSL. Its `pyproject.toml` is already published
-  and its runtime deps (numpy/scipy/polars/pydantic/pyyaml) carry no Spark, so
-  it imports cleanly into a streaming process.
+- `options-backtest-lab @ git+https://github.com/npComplete21/options-backtest-lab@v0.2.0`
+  — the **shared tau clock** (`obl.timebase`, section 3), the pricer, and the
+  strategy DSL. Its runtime deps (numpy/scipy/polars/pydantic/pyyaml) carry no
+  Spark, so it imports cleanly into a streaming process.
+
+  Pinned to a **tag, never a branch**: a floating ref could move the clock, and
+  therefore every delta-selected strike, without leaving a diff in this repo.
+  Treat a bump as a modelling change.
+
+  That repo was packaged as a bare `src/` directory until v0.2.0 and was not
+  importable at all — `timebase.py` was a top-level module and never reached the
+  wheel. It is now packaged as `obl`, chosen over a literal `src` because this
+  repo uses a src/ layout too and the installed name would have collided.
 - `polars`, `duckdb`, `pyarrow` — matching backtest-lab's stack, not v1's
   Spark/Athena
 - `pandas_market_calendars` — pinned to backtest-lab's version so expiries and

@@ -35,7 +35,7 @@ make test-all      # adds integration tests against the running broker
 
 ```
 src/olv/
-  common/    config, execution-mode guard, tau clock, sessions, ids, Kafka topology
+  common/    config, execution-mode guard, sessions, ids, Kafka topology
   feed/      vendor client, watch set, quote hygiene gate, producer
   strategy/  consumers, strategy definitions, residuals
   broker/    paper order submission, conservative fill model

@@ -50,6 +50,19 @@ flag loudly, not assume.
   production hostname is committed to this repo** — the paper host is a
   literal, the live host must come from the environment and has no default.
   A test greps `src/` to keep that true, so never add a live URL literal.
+- **The tau clock is not in this repo.** It lives in `obl.timebase`, shared
+  with `options-backtest-lab` and pinned by tag in `pyproject.toml`; plan §3
+  makes an identical clock in both repos a hard requirement. Do not add a local
+  clock, and do not compute a year fraction inline — both recreate the fork
+  that was closed on 2026-09-09. `olv.common.sessions.SessionCalendar` is our
+  implementation of the clock's `SessionSource` protocol; the clock is
+  pure-stdlib and takes sessions injected, so keep it that way.
+  Bumping the pin can move every delta-selected strike: treat it as a modelling
+  change and re-run `tests/test_shared_clock.py`.
+- Never take greeks or implied vol from a market-data vendor. They embed the
+  vendor's clock, rate and dividend conventions; the clock alone moves
+  `sigma*sqrt(tau)` by 2.31x at 0DTE. Compute them from the recorded mid with
+  backtest-lab's pricer.
 
 ## Out of scope for this repo
 - Historical backtesting / synthetic option pricing → that's

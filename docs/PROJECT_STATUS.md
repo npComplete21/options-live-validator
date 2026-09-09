@@ -12,8 +12,12 @@ things stand right now and what to do next.
 Phases 0 and 1 are merged and verified running: the 0DTE chain recorder
 carries a synthetic feed through the hygiene gate, into both Kafka topics, and
 out to partitioned Parquet. Nothing trades yet and nothing has been recorded
-from a real session. Phase 2 (IV/greeks, tau-clock calibration) is next, but is
-**blocked on two cross-repo issues** — see "Immediate next action".
+from a real session.
+
+The two cross-repo blockers in front of Phase 2 are resolved in code: the tau
+clock is now one shared module in `obl.timebase`, and backtest-lab is packaged
+so it can actually be imported. **One manual step remains** — merging
+backtest-lab's PR #2 and cutting the `v0.2.0` tag this repo pins.
 
 ## Build order progress
 
@@ -25,8 +29,9 @@ Phases as defined in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) §15.
 - [x] **Phase 1** — the recorder: watch set, hygiene gate, producer into both
       topics, Parquet archiver — merged in
       [PR #2](https://github.com/npComplete21/options-live-validator/pull/2)
-- [ ] **Phase 2** — IV/greeks via backtest-lab's pricer, tau-clock calibration,
-      intraday vol curve, report C — **blocked**, see below
+- [~] **Phase 2** — IV/greeks via backtest-lab's pricer, tau-clock calibration,
+      intraday vol curve, report C — prerequisites done (shared clock, installable
+      dependency); no Phase 2 code written yet
 - [ ] **Phase 3** — offline tournament: replay recordings through all five
       strategies with conservative fills
 - [ ] **Phase 4** — live paper loop, DynamoDB state store, restart test
@@ -108,36 +113,44 @@ Phases as defined in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) §15.
   driven only from tests; `record.py` and `kafka_admin.py` are the only
   runnable modules.
 - No DynamoDB, no transactional offset-with-state, no broker credentials.
-- The backtest-lab dependency is **not in `pyproject.toml`** — intentionally,
-  since Phases 0–1 need no pricing math (see the comment in `pyproject.toml`).
+- The backtest-lab dependency **is** now in `pyproject.toml`, pinned to
+  `v0.2.0` — a tag that does not exist until PR #2 merges. Nothing in `src/`
+  imports the pricer yet; only the shared clock is in use.
 
 ## Immediate next action
 
-**Unblock Phase 2 by fixing the two cross-repo issues, before writing any
-Phase 2 code here.**
+**Merge `npComplete21/options-backtest-lab#2`, then tag `v0.2.0` from its
+`main`.** That tag is what `pyproject.toml` here already pins, so until it
+exists `make install` cannot resolve the dependency from a clean checkout.
+(Everything is verified against a local install of the same commit; only the
+pin target is outstanding.)
 
-1. **`options-backtest-lab` has nothing importable.** Its `main` is a single
-   "Initial Commit"; the pricer, instrument registry and strategy DSL all sit
-   unmerged on branch `claude/options-backtest-lab-setup-4e7e92`. Plan §16
-   specifies depending on `git+...@<tag>` — there is no tag and nothing on
-   `main` to tag. Merge that branch and cut a tag.
-2. **The tau clock has already forked.** Both repos independently wrote one,
-   and both describe themselves as the extraction point for the shared
-   package:
-   - backtest-lab `src/timebase.py` — `tau(as_of, expiry)`, carries a stable
-     `id` for `run_id` hashing, raises `ShortDatedTauError` when a daily clock
-     is asked for 0DTE
-   - live-validator `src/olv/common/clock.py` — `year_fraction(now, expiry)`,
-     carries a `name`
+After the tag, Phase 2 proper starts: back out implied vol from the recorded
+mid using `obl.pricing.black_scholes` through `obl.timebase`, then calibrate
+the intraday vol curve that `VolWeightedClock` is waiting for.
 
-   Plan §3's hard requirement is that the clock be **identical in both repos or
-   no live-vs-backtest comparison means anything**. Reconcile to one shared
-   module. Recommendation: take backtest-lab's `id`-carrying interface as the
-   base, since the identifier belongs in `run_id`.
+### What was done to get here (2026-09-09)
 
-Only once a tagged backtest-lab exists and one clock serves both repos should
-Phase 2 start backing out IV — otherwise the divergence gets baked into every
-recorded residual.
+Both blockers previously listed here are closed in code:
+
+1. **backtest-lab's work is off the branch and installable.** Phases 2a/2b/3 —
+   instruments, ingestion, selectors, the strategy DSL — plus the clock, are in
+   PR #2. That repo also turned out not to be importable *at all*: `timebase.py`
+   was a top-level module under `src/` and never reached the wheel, the other
+   packages were flattened to top-level names while the code imported `src.X`,
+   and neither registry's YAML shipped. All three were invisible from inside a
+   checkout because pytest puts the repo root on `sys.path`. It is now packaged
+   as `obl`, verified by installing into a clean venv and importing with no
+   source on the path.
+2. **The tau clock is one module.** It was forked: both repos had written one,
+   each calling itself the extraction point for the shared package. They were
+   complementary, not rival — backtest-lab's was date-resolution and explicitly
+   refused 0DTE; this repo's counted real session seconds and was the
+   implementation that refusal was waiting for. Merged into `obl.timebase`:
+   instants throughout, sessions injected so it stays pure-stdlib, backtest-lab's
+   `id`/registry kept for `run_id` reproducibility. This repo's
+   `src/olv/common/clock.py` is **deleted**; `tests/test_shared_clock.py` is the
+   conformance test binding the shared clock to our real exchange calendar.
 
 ## Open decisions / deliberately deferred
 
@@ -195,3 +208,17 @@ From plan §14, plus what surfaced during Phases 0–1:
 - **Defined-risk and undefined-risk max losses are never rendered in the same
   column without a marker.** The defined-risk book's max loss is a fact; the
   naked book's is a hope. Plan §6.
+- **The tau clock is shared code, not this repo's.** It lives in `obl.timebase`,
+  pinned by tag. Adding a local clock or computing a year fraction inline
+  recreates the fork closed on 2026-09-09. Bumping the pin can move every
+  delta-selected strike, so it is a modelling change, not a dependency bump.
+  Plan §3, and `CLAUDE.md` Conventions.
+- **An expiry in the past returns tau `0.0` rather than raising** — a deliberate
+  loosening when the clocks merged, since backtest-lab needs zero for contracts
+  rolled off a chain. The guard moved rather than vanished: an expired contract
+  reaching a live decision is a *selection* bug, and `clock_ratio` still refuses
+  a degenerate denominator.
+- **The shared clock takes sessions injected and stays pure-stdlib**, so
+  depending on it pulls no `pandas_market_calendars`, numpy or polars into a
+  streaming process. `olv.common.sessions.SessionCalendar` is our side of that
+  seam.
