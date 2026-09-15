@@ -30,8 +30,8 @@ Phases as defined in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) §15.
       topics, Parquet archiver — merged in
       [PR #2](https://github.com/npComplete21/options-live-validator/pull/2)
 - [~] **Phase 2** — IV/greeks via backtest-lab's pricer, tau-clock calibration,
-      intraday vol curve, report C — prerequisites cleared (shared clock adopted,
-      dependency pinned and resolving); no Phase 2 code written yet
+      intraday vol curve, report C — **IV/greeks and report C done**; the vol
+      curve and both halves of the phase gate are blocked on real data
 - [ ] **Phase 3** — offline tournament: replay recordings through all five
       strategies with conservative fills
 - [ ] **Phase 4** — live paper loop, DynamoDB state store, restart test
@@ -121,15 +121,25 @@ Phases as defined in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) §15.
 
 ## Immediate next action
 
-**Start Phase 2: back out implied vol from the recorded mid.** Use
-`obl.pricing.black_scholes` through `obl.timebase.TradingHoursClock` (driven by
-`olv.common.sessions.SessionCalendar`), per plan section 9 — greeks and IV are
-computed here, never taken from a vendor whose own clock, rate and dividend
-conventions would contaminate every residual.
+**Wire a real paper feed.** It is now the binding constraint on everything:
 
-The gate is plan section 15's: reproduce vendor greeks to a stated tolerance,
-then choose the clock on measured data. That second half feeds
-`VolWeightedClock`, which raises until the U-shaped intraday curve exists.
+- Phase 2's gate (*"reproduces vendor greeks to a stated tolerance; clock chosen
+  on measured data"*) cannot be discharged without it — there is no vendor and
+  no recorded session.
+- The intraday vol curve, and therefore `VolWeightedClock`, stays unimplemented.
+- Per section 0 every unrecorded session is permanently absent from the dataset
+  this whole program depends on, so the cost of waiting compounds daily.
+
+Section 9's open question (which broker) is the decision to make: Alpaca paper
+or Tradier sandbox, evaluated on real OPRA bid/ask **with sizes**, snapshot
+cadence and rate limits, multi-leg 0DTE order support, and a documented paper
+fill engine. If the paper tier serves indicative or delayed quotes it cannot
+measure spreads, and the paid-feed decision reopens immediately.
+
+A smaller, independent piece of work is also ready: **archive rejections.** They
+are published to `chain.<ticker>` but the archiver consumes `quotes.<ticker>`
+only, so a result section 9 calls first-class expires with Kafka's 7-day
+retention and never reaches Parquet. Report C names this as blocked.
 
 ### What was done to get here (2026-09-09 to 2026-09-15)
 

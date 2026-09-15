@@ -138,9 +138,25 @@ def enrich_snapshot(
     time and show up later as a skew artefact.
     """
     if frame.is_empty():
+        # Full schema, not a partial one: an empty recording is a normal
+        # outcome (a holiday, a halted session), and a consumer that has to
+        # branch on "did any row survive" will eventually forget to.
+        floats = (
+            "tau",
+            "forward",
+            "log_moneyness",
+            "sigma_bid",
+            "sigma_mid",
+            "sigma_ask",
+            "vol_half_spread",
+            "delta",
+            "gamma",
+            "vega",
+            "theta",
+        )
         return frame.with_columns(
-            pl.lit(None, dtype=pl.Float64).alias(c)
-            for c in ("tau", "forward", "log_moneyness", "sigma_mid")
+            *[pl.lit(None, dtype=pl.Float64).alias(c) for c in floats],
+            pl.lit(None, dtype=pl.String).alias("iv_status"),
         )
 
     taus = np.array(
@@ -210,6 +226,37 @@ def stats_for(frame: pl.DataFrame) -> EnrichmentStats:
     )
 
 
+#: Columns the recorder writes as ISO strings. They arrive that way from both
+#: drivers - Kafka carries JSON, and the archiver writes what it consumed - so
+#: parsing here is what lets one engine serve replay from either.
+TIMESTAMP_COLUMNS = ("quote_ts", "observed_at", "underlying_ts")
+DATE_COLUMNS = ("expiry",)
+
+
+def normalise_timestamps(frame: pl.DataFrame) -> pl.DataFrame:
+    """Parse ISO timestamp columns, leaving already-typed frames untouched.
+
+    The archive stores timestamps as strings because that is how they crossed
+    Kafka, and a tau clock cannot be handed a string. Parsing is idempotent so
+    callers holding a typed frame - tests, or a future in-process consumer - do
+    not have to care which shape they have.
+    """
+    casts = [
+        # UTC explicitly: the recorded strings carry an offset, and polars
+        # refuses to guess. The clock is timezone-agnostic (it pads its
+        # session lookup by a day for exactly this reason), so normalising
+        # to UTC here changes no tau.
+        pl.col(name).str.to_datetime(time_zone="UTC").alias(name)
+        for name in TIMESTAMP_COLUMNS
+        if name in frame.columns and frame.schema[name] == pl.String
+    ] + [
+        pl.col(name).str.to_date().alias(name)
+        for name in DATE_COLUMNS
+        if name in frame.columns and frame.schema[name] == pl.String
+    ]
+    return frame.with_columns(casts) if casts else frame
+
+
 def snapshot_forward(
     frame: pl.DataFrame,
     *,
@@ -249,6 +296,7 @@ def enrich(
     """
     calendar = calendar or SessionCalendar()
     clock = clock or default_clock(calendar)
+    frame = normalise_timestamps(frame)
 
     enriched = [
         enrich_snapshot(
@@ -259,7 +307,9 @@ def enrich(
         )
         for (_, group) in sorted(frame.group_by("observed_at").__iter__(), key=lambda kv: kv[0])
     ]
-    return pl.concat(enriched) if enriched else frame
+    if not enriched:
+        return enrich_snapshot(frame, forward=float("nan"), clock=clock, calendar=calendar)
+    return pl.concat(enriched)
 
 
 def forward_series(frame: pl.DataFrame) -> pl.DataFrame:
@@ -271,7 +321,7 @@ def forward_series(frame: pl.DataFrame) -> pl.DataFrame:
     forward is one whose implied vols should not be trusted.
     """
     rows = []
-    for observed_at, group in frame.group_by("observed_at"):
+    for observed_at, group in normalise_timestamps(frame).group_by("observed_at"):
         est = snapshot_forward(group)
         rows.append(
             {
