@@ -37,6 +37,7 @@ make test-all      # adds integration tests against the running broker
 src/olv/
   common/    config, execution-mode guard, sessions, ids, Kafka topology
   feed/      vendor client, watch set, quote hygiene gate, producer
+  analytics/ measured forward, implied vol and greeks from recorded quotes
   strategy/  consumers, strategy definitions, residuals
   broker/    paper order submission, conservative fill model
   state/     DynamoDB state, S3/Parquet archive
