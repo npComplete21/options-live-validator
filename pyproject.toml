@@ -4,10 +4,15 @@ version = "0.1.0"
 description = "Streaming paper-trading validator and 0DTE chain recorder for QQQ options strategies"
 requires-python = ">=3.11"
 # No pricing math lives in this repo (docs/IMPLEMENTATION_PLAN.md section 14).
-# The Black-Scholes module and strategy DSL are imported from
-# options-backtest-lab; that dependency is added at Phase 2, when the first
-# code needs to back out IV. Phase 0-1 deliberately do not need it.
+# The Black-Scholes module, the tau clock and the strategy DSL are imported from
+# options-backtest-lab.
 dependencies = [
+    # Pinned to a tag, never a branch: this carries obl.timebase, the *shared*
+    # tau clock. Section 3 makes an identical clock in both repos a hard
+    # requirement, and a floating ref would let it drift without a diff here.
+    # Changing this pin can move every delta-selected strike, so treat a bump as
+    # a modelling change and re-check tests/test_shared_clock.py.
+    "options-backtest-lab @ git+https://github.com/npComplete21/options-backtest-lab@v0.2.0",
     "confluent-kafka",          # section 11: industry-standard client, replaces kafka-python
     "polars",                   # matches backtest-lab's stack
     "pyarrow",                  # Parquet archive

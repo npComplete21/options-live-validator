@@ -4,41 +4,27 @@ Session boundaries have to be identical here and in options-backtest-lab, or a
 live-vs-backtest comparison is measuring a calendar disagreement rather than a
 strategy. Both repos use ``pandas_market_calendars`` for that reason; see
 docs/IMPLEMENTATION_PLAN.md section 16.
+
+:class:`SessionCalendar` is this repo's implementation of the shared clock's
+``SessionSource`` protocol. The clock itself lives in ``obl.timebase`` and is
+pure-stdlib by design, so it takes sessions injected rather than importing a
+market-calendar library; building them is this side's job.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import functools
-from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 
 import pandas_market_calendars as mcal
+from obl.timebase import Session
 
 MARKET_TZ = ZoneInfo("America/New_York")
 
 #: US equity options cease trading at the equity close. A 0DTE contract's
 #: expiry instant, for pricing purposes, is that close.
 REGULAR_CLOSE = dt.time(16, 0)
-
-
-@dataclass(frozen=True)
-class Session:
-    """One trading day, as an inclusive-open/exclusive-close instant pair."""
-
-    date: dt.date
-    open: dt.datetime
-    close: dt.datetime
-
-    @property
-    def seconds(self) -> float:
-        return (self.close - self.open).total_seconds()
-
-    def overlap_seconds(self, start: dt.datetime, end: dt.datetime) -> float:
-        """Seconds of this session lying inside ``[start, end)``."""
-        lo = max(self.open, start)
-        hi = min(self.close, end)
-        return max(0.0, (hi - lo).total_seconds())
 
 
 class SessionCalendar:
