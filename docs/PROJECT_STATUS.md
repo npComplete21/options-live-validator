@@ -1,6 +1,6 @@
 # options-live-validator — Project Status
 
-_Last updated: 2026-09-09_
+_Last updated: 2026-09-15_
 
 This file is a **living snapshot**, fully overwritten on each update — not a
 history log. Design reasoning lives in
@@ -14,10 +14,10 @@ carries a synthetic feed through the hygiene gate, into both Kafka topics, and
 out to partitioned Parquet. Nothing trades yet and nothing has been recorded
 from a real session.
 
-The two cross-repo blockers in front of Phase 2 are resolved in code: the tau
-clock is now one shared module in `obl.timebase`, and backtest-lab is packaged
-so it can actually be imported. **One manual step remains** — merging
-backtest-lab's PR #2 and cutting the `v0.2.0` tag this repo pins.
+The two cross-repo blockers in front of Phase 2 are **fully cleared**: the tau
+clock is one shared module in `obl.timebase`, backtest-lab is packaged as `obl`
+and installable, and this repo resolves it from the pinned tag `v0.2.0`.
+Verified end to end from a clean venv. Phase 2 can start on the next commit.
 
 ## Build order progress
 
@@ -30,25 +30,28 @@ Phases as defined in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) §15.
       topics, Parquet archiver — merged in
       [PR #2](https://github.com/npComplete21/options-live-validator/pull/2)
 - [~] **Phase 2** — IV/greeks via backtest-lab's pricer, tau-clock calibration,
-      intraday vol curve, report C — prerequisites done (shared clock, installable
-      dependency); no Phase 2 code written yet
+      intraday vol curve, report C — prerequisites cleared (shared clock adopted,
+      dependency pinned and resolving); no Phase 2 code written yet
 - [ ] **Phase 3** — offline tournament: replay recordings through all five
       strategies with conservative fills
 - [ ] **Phase 4** — live paper loop, DynamoDB state store, restart test
 - [ ] **Phase 5** — broker paper order submission
 - [ ] **Phase 6** — sweeps, reports A and B
 
-## Verified state (checked 2026-09-09, not just asserted)
+## Verified state (checked 2026-09-15, from a clean venv, not just asserted)
 
-- `make test` → **130 passed**
-- `make test-all` → **+12 integration passed** against the running broker
-  (`olv-kafka` container healthy)
+- Clean `venv` + `pip install -e '.[dev]'` resolves
+  `options-backtest-lab 0.2.0` from the pinned git tag
+- `pytest` → **144 passed** (132 unit + 12 integration) in that clean venv,
+  against the running broker (`olv-kafka` healthy)
 - End-to-end recorder run:
   `python -m olv.record --snapshots 8 --interval 0 --defect-rate 0.08`
-  → 8 snapshots, 740 quotes published, 60 rejected (7.5%), rejection reasons
-  broken out by category
-- Branch `claude/project-status-next-steps-7131e1` is level with `origin/main`
-  (0 ahead / 0 behind); working tree clean
+  → 8 snapshots, 740 quotes published, 60 rejected (7.5%), reasons broken out
+- The shared clock reproduces the plan's section 3 figures exactly from a
+  dependency-free install: calendar tau `0.000713`, trading-hours tau
+  `0.003816`, `sigma*sqrt(tau)` ratio **2.3126**
+- No local clock remains: `src/olv/common/clock.py` is deleted and nothing
+  imports `olv.common.clock`
 
 ## What's done
 
@@ -113,35 +116,33 @@ Phases as defined in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) §15.
   driven only from tests; `record.py` and `kafka_admin.py` are the only
   runnable modules.
 - No DynamoDB, no transactional offset-with-state, no broker credentials.
-- The backtest-lab dependency **is** now in `pyproject.toml`, pinned to
-  `v0.2.0` — a tag that does not exist until PR #2 merges. Nothing in `src/`
-  imports the pricer yet; only the shared clock is in use.
+- Nothing in `src/` imports backtest-lab's **pricer** yet — only the shared
+  clock is in use. The dependency is pinned to `v0.2.0` and resolving.
 
 ## Immediate next action
 
-**Merge `npComplete21/options-backtest-lab#2`, then tag `v0.2.0` from its
-`main`.** That tag is what `pyproject.toml` here already pins, so until it
-exists `make install` cannot resolve the dependency from a clean checkout.
-(Everything is verified against a local install of the same commit; only the
-pin target is outstanding.)
+**Start Phase 2: back out implied vol from the recorded mid.** Use
+`obl.pricing.black_scholes` through `obl.timebase.TradingHoursClock` (driven by
+`olv.common.sessions.SessionCalendar`), per plan section 9 — greeks and IV are
+computed here, never taken from a vendor whose own clock, rate and dividend
+conventions would contaminate every residual.
 
-After the tag, Phase 2 proper starts: back out implied vol from the recorded
-mid using `obl.pricing.black_scholes` through `obl.timebase`, then calibrate
-the intraday vol curve that `VolWeightedClock` is waiting for.
+The gate is plan section 15's: reproduce vendor greeks to a stated tolerance,
+then choose the clock on measured data. That second half feeds
+`VolWeightedClock`, which raises until the U-shaped intraday curve exists.
 
-### What was done to get here (2026-09-09)
+### What was done to get here (2026-09-09 to 2026-09-15)
 
-Both blockers previously listed here are closed in code:
+Both blockers previously listed here are closed, merged and tagged:
 
-1. **backtest-lab's work is off the branch and installable.** Phases 2a/2b/3 —
-   instruments, ingestion, selectors, the strategy DSL — plus the clock, are in
-   PR #2. That repo also turned out not to be importable *at all*: `timebase.py`
-   was a top-level module under `src/` and never reached the wheel, the other
-   packages were flattened to top-level names while the code imported `src.X`,
-   and neither registry's YAML shipped. All three were invisible from inside a
-   checkout because pytest puts the repo root on `sys.path`. It is now packaged
-   as `obl`, verified by installing into a clean venv and importing with no
-   source on the path.
+1. **backtest-lab is merged, packaged and tagged `v0.2.0`.** Phases 2a/2b/3 —
+   instruments, ingestion, selectors, the strategy DSL — plus the clock, landed
+   in PRs #2 and #3. That repo also turned out not to be importable *at all*:
+   `timebase.py` was a top-level module under `src/` and never reached the
+   wheel, the other packages were flattened to top-level names while the code
+   imported `src.X`, and neither registry's YAML shipped. All three were
+   invisible from inside a checkout because pytest puts the repo root on
+   `sys.path`. It is now packaged as `obl`.
 2. **The tau clock is one module.** It was forked: both repos had written one,
    each calling itself the extraction point for the shared package. They were
    complementary, not rival — backtest-lab's was date-resolution and explicitly
