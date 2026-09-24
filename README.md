@@ -40,7 +40,7 @@ src/olv/
   analytics/ measured forward, implied vol and greeks from recorded quotes
   strategy/  consumers, strategy definitions, residuals
   broker/    paper order submission, conservative fill model
-  state/     DynamoDB state, S3/Parquet archive
+  state/     DynamoDB state, S3/Parquet archive (quotes + rejections)
   reporting/ tournament scorecard, cost decomposition, surface report
 ```
 
