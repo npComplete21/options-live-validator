@@ -22,7 +22,7 @@ from pathlib import Path
 
 from olv.analytics.surface import enrich, stats_for
 from olv.reporting import surface as report_c
-from olv.state.archive import read_archive
+from olv.state.archive import read_archive, read_rejections
 
 logger = logging.getLogger("olv.surface")
 
@@ -33,7 +33,15 @@ def run(root: Path, ticker: str, session_date: dt.date | None = None) -> report_
         raise SystemExit(f"no recorded quotes under {root} for {ticker}")
     enriched = enrich(raw)
     logger.info("%s", stats_for(enriched))
-    return report_c.build(enriched, raw)
+
+    # Absent rather than empty when the dataset does not exist, so the report
+    # can distinguish "rejected nothing" from "nobody archived the rejections".
+    rejections = read_rejections(root, ticker, session_date)
+    if rejections.is_empty():
+        logger.warning("no rejections archived under %s - rejection rates unavailable", root)
+    else:
+        logger.info("%d archived rejections", rejections.height)
+    return report_c.build(enriched, raw, rejections)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -1,6 +1,6 @@
 # options-live-validator — Project Status
 
-_Last updated: 2026-09-15_
+_Last updated: 2026-09-24_
 
 A **living snapshot**, fully overwritten on each update — not a history log.
 Design reasoning lives in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md);
@@ -167,12 +167,15 @@ now packaged as `obl` and tagged `v0.2.0`.
 
 ## Known gaps (found during Phase 2, not yet fixed)
 
-1. **Rejections never reach Parquet.** They are published to `chain.<ticker>`,
-   but the archiver consumes `quotes.<ticker>` only — so a result §9 calls
-   first-class expires with Kafka's 7-day retention. Report C names this as
-   blocked. Fixing it is an archiver change, ~an afternoon.
+1. ~~Rejections never reach Parquet.~~ **Fixed 2026-09-24.**
+   `RejectionArchiver` consumes `chain.<ticker>` into its own Hive dataset
+   beside the accepted quotes, and report C now carries rejection rates by
+   reason and per snapshot.
 2. **No real recording.** See "Immediate next action".
 3. **`VolWeightedClock` unimplemented** — blocked on (2).
+4. **The enriched zone is not persisted.** `olv.surface` recomputes σ and greeks
+   on every run. Deliberate while the clock was settling; worth writing before
+   Phase 3 replays the archive repeatedly, with the clock `id` on every row.
 
 ---
 
@@ -227,9 +230,9 @@ quotes **with sizes**, since that distinction is what disqualified Alpaca.
 
 ### If the data decision needs time
 
-Two pieces of local work are ready and independent: **archive rejections**
-(gap 1 above), and the **Phase 4 Kafka consumer skeleton** reusing
-`olv.analytics` unchanged.
+One piece of local work remains ready and independent: the **Phase 4 Kafka
+consumer skeleton**, reusing `olv.analytics` unchanged. Persisting the enriched
+zone (gap 4) is worth doing once a real feed fixes the schema.
 
 ---
 

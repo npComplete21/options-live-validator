@@ -14,6 +14,7 @@ import contextlib
 import datetime as dt
 import uuid
 
+import polars as pl
 import pytest
 
 from olv.common.kafka import DEFAULT_BOOTSTRAP, chain_topic, quotes_topic
@@ -22,7 +23,12 @@ from olv.feed.producer import SnapshotPublisher
 from olv.feed.synthetic import SyntheticFeed
 from olv.kafka_admin import provision
 from olv.record import record
-from olv.state.archive import QuoteArchiver, read_archive
+from olv.state.archive import (
+    QuoteArchiver,
+    RejectionArchiver,
+    read_archive,
+    read_rejections,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -166,3 +172,57 @@ class TestResilience:
 
         assert stats.malformed >= 2
         assert "malformed" in str(stats)
+
+
+@pytest.fixture(scope="module")
+def rejections_archived(ticker, recorded, tmp_path_factory):
+    """Run the rejection archiver over the same recording, through the broker."""
+    root = tmp_path_factory.mktemp("rejections")
+    archiver = RejectionArchiver(
+        ticker, root, bootstrap=DEFAULT_BOOTSTRAP, group_id=f"test.rejections.{ticker}"
+    )
+    stats = archiver.run(max_messages=SNAPSHOTS, idle_timeout=15.0)
+    return root, stats
+
+
+class TestRejectionsReachParquet:
+    """Section 9 calls rejections a first-class result. They are published on
+    chain.<ticker>, which the quote archiver does not consume, so without this
+    consumer they expire with Kafka's seven-day retention and the permanent
+    record that section 0 makes the deliverable would simply lack them."""
+
+    def test_every_rejected_quote_is_archived(self, ticker, recorded, rejections_archived):
+        root, _ = rejections_archived
+        assert len(read_rejections(root, ticker)) == recorded.rejected
+
+    def test_reasons_survive_the_round_trip(self, ticker, recorded, rejections_archived):
+        """Counted *by reason*, never collapsed into one 'bad quote' bucket:
+        a session losing its wings to zero bids is a different finding from one
+        losing them to crossed markets."""
+        root, _ = rejections_archived
+        archived_counts = dict(read_rejections(root, ticker).group_by("reason").len().iter_rows())
+        assert archived_counts == recorded.rejection_counts
+
+    def test_rejections_do_not_leak_into_the_quotes_dataset(self, ticker, archived):
+        """The whole point of a separate dataset: a reader who forgets a status
+        filter must not be able to enrich a crossed market as tradeable."""
+        root, _ = archived
+        quotes = read_archive(root, ticker)
+        assert "reason" not in quotes.columns
+
+    def test_the_denominator_travels_with_each_row(self, ticker, recorded, rejections_archived):
+        root, _ = rejections_archived
+        frame = read_rejections(root, ticker)
+        per_snapshot = frame.group_by("observed_at").agg(
+            pl.len().alias("rows"), pl.col("snapshot_rejected").first()
+        )
+        assert (per_snapshot["rows"] == per_snapshot["snapshot_rejected"]).all()
+
+    def test_the_two_datasets_describe_the_same_session(
+        self, ticker, recorded, archived, rejections_archived
+    ):
+        """Accepted + rejected must account for everything the gate saw."""
+        q_root, _ = archived
+        r_root, _ = rejections_archived
+        total = len(read_archive(q_root, ticker)) + len(read_rejections(r_root, ticker))
+        assert total == recorded.quotes_published + recorded.rejected

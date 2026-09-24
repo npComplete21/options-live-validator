@@ -9,8 +9,8 @@ asked for                                    status
 ===========================================  ===========================================
 ``sigma_market`` by strike and time of day   available
 observed half-spread in vol points           available
+quote rejection rates (section 9)            available
 the fitted intraday vol curve (section 3)    **unavailable** - needs a recorded session
-quote rejection rates (section 9)            **unavailable** - not archived, see below
 ===========================================  ===========================================
 
 *The vol curve.* Section 3 makes the curve a measured input, not a modelled
@@ -24,11 +24,16 @@ reason, rather than filled in.
 
 *Rejection rates.* Section 9 calls these a first-class result - at 0DTE the
 wings go untradeable for stretches, and how often a strategy *could not have
-traded* is a finding in itself. They are published, on ``chain.<ticker>``, but
-the archiver consumes ``quotes.<ticker>`` only, so they live at Kafka's seven
-day retention and never reach Parquet. A first-class result with a seven-day
-memory is not a permanent record, and section 0 makes the recording the
-deliverable. Fixing that is an archiver change, not a reporting one.
+traded* is a finding in itself. They are published on ``chain.<ticker>`` rather
+than ``quotes.<ticker>``, by construction: a rejected quote never becomes a
+quote. :class:`olv.state.archive.RejectionArchiver` moves them into their own
+Hive dataset beside the accepted quotes, so they now outlive Kafka's seven-day
+retention.
+
+The rate needs both datasets. Rejections alone cannot supply the denominator,
+because a snapshot that rejected nothing writes no row at all - so the accepted
+count comes from the quotes archive and the two are cross-checked against the
+per-snapshot counts carried on each rejection row.
 
 What this report adds beyond section 13's list is the **assumption census**:
 the measured forward and its dispersion per snapshot, and the share of the
@@ -67,9 +72,9 @@ UNAVAILABLE_VOL_CURVE = (
     "against numbers the synthetic feed forbids using in analysis"
 )
 UNAVAILABLE_REJECTIONS = (
-    "not archived: rejections are published to chain.<ticker> but the archiver "
-    "consumes quotes.<ticker> only, so they expire with Kafka's 7-day retention "
-    "and never reach Parquet"
+    "no rejections archived for this recording: run olv.state.archive."
+    "RejectionArchiver against chain.<ticker>, or the session genuinely "
+    "rejected nothing"
 )
 
 
@@ -145,6 +150,45 @@ def iv_status_census(enriched: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+def rejection_rates(rejections: pl.DataFrame, accepted: int) -> pl.DataFrame:
+    """How often the gate refused a quote, by reason.
+
+    Section 9: rejections are counted and published, never silently dropped.
+    At 0DTE the wings go untradeable for stretches of the session, so how often
+    a strategy *could not have traded* is a result in its own right rather than
+    a data-quality footnote.
+    """
+    if rejections.is_empty():
+        return pl.DataFrame()
+    total = rejections.height + accepted
+    return (
+        rejections.group_by("reason")
+        .len()
+        .with_columns((pl.col("len") / total).alias("share_of_observed"))
+        .sort("len", descending=True)
+    )
+
+
+def rejections_over_time(rejections: pl.DataFrame) -> pl.DataFrame:
+    """Rejections per snapshot, with the snapshot's own accepted count.
+
+    A session-wide average hides the shape that matters: the wings go
+    untradeable in stretches, not uniformly, and a strategy blocked for twenty
+    minutes around a move is a different fact from one blocked evenly all day.
+    """
+    if rejections.is_empty():
+        return pl.DataFrame()
+    cols = [pl.len().alias("rejected")]
+    if "snapshot_accepted" in rejections.columns:
+        cols.append(pl.col("snapshot_accepted").first().alias("accepted"))
+    out = rejections.group_by("observed_at").agg(cols).sort("observed_at")
+    if "accepted" in out.columns:
+        out = out.with_columns(
+            (pl.col("rejected") / (pl.col("rejected") + pl.col("accepted"))).alias("reject_rate")
+        )
+    return out
+
+
 @dataclass(frozen=True)
 class SurfaceReport:
     """Report C. ``blocked`` names what section 13 asked for and why it is absent."""
@@ -153,6 +197,8 @@ class SurfaceReport:
     half_spread: pl.DataFrame
     forwards: pl.DataFrame
     status_census: pl.DataFrame
+    rejection_rates: pl.DataFrame
+    rejections_over_time: pl.DataFrame
     feed_sources: tuple[str, ...]
     blocked: dict[str, str]
 
@@ -182,6 +228,8 @@ class SurfaceReport:
             ("## Observed half-spread in vol points", self.half_spread),
             ("## Measured forward, basis and dispersion", self.forwards),
             ("## Implied-vol status census", self.status_census),
+            ("## Quote rejection rates, by reason", self.rejection_rates),
+            ("## Rejections per snapshot", self.rejections_over_time),
         ):
             lines += [title, ""]
             lines += ["_no rows_" if frame.is_empty() else str(frame), ""]
@@ -193,11 +241,39 @@ class SurfaceReport:
         return "\n".join(lines)
 
 
-def build(enriched: pl.DataFrame, raw: pl.DataFrame | None = None) -> SurfaceReport:
+def _accepted_alongside(quotes: pl.DataFrame, rejections: pl.DataFrame) -> int:
+    """Accepted quotes from the *same sessions* the rejections cover.
+
+    An archive can hold more sessions than the rejection archiver has consumed —
+    it was added later, or it was run over a narrower range. Dividing this
+    session's rejections by every session's accepted quotes silently understates
+    a rate section 9 calls a first-class result, and it understates it in the
+    flattering direction, which is worse.
+    """
+    if quotes.is_empty() or rejections.is_empty():
+        return quotes.height
+    if "observed_at" not in quotes.columns or "observed_at" not in rejections.columns:
+        return quotes.height
+    days = set(rejections["observed_at"].cast(pl.String).str.slice(0, 10).to_list())
+    return quotes.filter(
+        pl.col("observed_at").cast(pl.String).str.slice(0, 10).is_in(list(days))
+    ).height
+
+
+def build(
+    enriched: pl.DataFrame,
+    raw: pl.DataFrame | None = None,
+    rejections: pl.DataFrame | None = None,
+) -> SurfaceReport:
     """Assemble report C from an enriched archive.
 
     ``raw`` is the pre-enrichment frame, used only for the forward series, which
     is measured from quotes rather than derived from anything enrichment added.
+
+    ``rejections`` comes from the separate rejections dataset. Absent, the
+    report says rejection rates are unavailable rather than reporting zero —
+    "nothing was rejected" and "nobody archived the rejections" are very
+    different claims and must not render identically.
     """
     source = raw if raw is not None else enriched
     sources = (
@@ -205,16 +281,22 @@ def build(enriched: pl.DataFrame, raw: pl.DataFrame | None = None) -> SurfaceRep
         if "feed_source" in source.columns and not source.is_empty()
         else ()
     )
+    rejections = pl.DataFrame() if rejections is None else rejections
+    blocked = {"intraday vol curve (section 3)": UNAVAILABLE_VOL_CURVE}
+    if rejections.is_empty():
+        blocked["quote rejection rates (section 9)"] = UNAVAILABLE_REJECTIONS
+
     return SurfaceReport(
         sigma_surface=sigma_by_strike_and_time(enriched),
         half_spread=half_spread_in_vol_points(enriched),
         forwards=forward_series(source) if not source.is_empty() else pl.DataFrame(),
         status_census=iv_status_census(enriched),
+        rejection_rates=rejection_rates(
+            rejections, accepted=_accepted_alongside(source, rejections)
+        ),
+        rejections_over_time=rejections_over_time(rejections),
         feed_sources=sources,
-        blocked={
-            "intraday vol curve (section 3)": UNAVAILABLE_VOL_CURVE,
-            "quote rejection rates (section 9)": UNAVAILABLE_REJECTIONS,
-        },
+        blocked=blocked,
     )
 
 
