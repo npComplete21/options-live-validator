@@ -1,6 +1,6 @@
 # options-live-validator — Project Status
 
-_Last updated: 2026-09-24_
+_Last updated: 2026-09-27_
 
 A **living snapshot**, fully overwritten on each update — not a history log.
 Design reasoning lives in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md);
@@ -34,8 +34,10 @@ Phases as defined in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) §15.
 - [~] **Phase 2** — IV/greeks **done**; report C **done**; τ-clock calibration
       and the intraday vol curve **blocked on real data**; the phase gate is
       **undischarged** (see below)
-- [ ] **Phase 3** — offline tournament: replay recordings through five
-      strategies with conservative fills
+- [~] **Phase 3** — offline tournament: the five strategies are **written and
+      binding** through the shared DSL with zero engine changes (§5's acceptance
+      test); the replay engine and fill model are not built, and it needs
+      recorded sessions to replay
 - [ ] **Phase 4** — live paper loop, DynamoDB state, restart test
 - [ ] **Phase 5** — broker paper order submission
 - [ ] **Phase 6** — sweeps, reports A and B
@@ -181,8 +183,8 @@ now packaged as `obl` and tagged `v0.2.0`.
 
 ## Not yet built
 
-- `src/olv/strategy/`, `src/olv/broker/` are empty — no strategies, no fill
-  model, no order submission.
+- `src/olv/broker/` is empty — no fill model, no order submission. The five
+  strategies exist as YAML but nothing executes them yet.
 - No vendor feed client. Deliberately last: everything downstream of
   `QuoteFeed` is vendor-independent, so a broker drops in as one class.
 - The archiver writes to a local `Path`, **not S3**.

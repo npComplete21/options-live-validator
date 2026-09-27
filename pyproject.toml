@@ -12,7 +12,7 @@ dependencies = [
     # requirement, and a floating ref would let it drift without a diff here.
     # Changing this pin can move every delta-selected strike, so treat a bump as
     # a modelling change and re-check tests/test_shared_clock.py.
-    "options-backtest-lab @ git+https://github.com/npComplete21/options-backtest-lab@v0.2.0",
+    "options-backtest-lab @ git+https://github.com/npComplete21/options-backtest-lab@v0.3.0",
     "confluent-kafka",          # section 11: industry-standard client, replaces kafka-python
     "polars",                   # matches backtest-lab's stack
     "pyarrow",                  # Parquet archive
@@ -34,6 +34,13 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# The tournament is loaded by path at runtime (olv/strategy/library.py), so the
+# YAML has to ship or the registry comes up empty when installed rather than
+# run from a checkout. The identical omission made options-backtest-lab
+# unimportable before v0.2.0.
+[tool.setuptools.package-data]
+"olv.strategy" = ["library/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
