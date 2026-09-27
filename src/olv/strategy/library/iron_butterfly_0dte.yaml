@@ -1,0 +1,29 @@
+name: iron_butterfly_0dte
+description: >
+  ATM shorts with wings. Maximum premium and MAXIMUM GAMMA - the riskiest
+  member of the tournament, and the one Natenberg warns about by name: "never
+  be short size in short-dated ATM options". Included because the warning is
+  worth testing rather than assuming, and because the wings make the loss
+  bounded even when gamma is at its worst.
+
+params:
+  wing_width:  {type: float, default: 10.0, min: 0.5}
+  profit_take: {type: float, default: 0.25, min: 0.05, max: 1.0}
+
+legs:
+  - {id: short_put,  right: P, qty: -1, expiry: {dte: {target: 0, tolerance: 0}}, strike: {atm: }}
+  - {id: short_call, right: C, qty: -1, expiry: {same_as: short_put},             strike: {atm: }}
+  - {id: long_put,   right: P, qty: 1,  expiry: {same_as: short_put},
+                                        strike: {offset: {base: short_put, points: "-{{wing_width}}"}}}
+  - {id: long_call,  right: C, qty: 1,  expiry: {same_as: short_put},
+                                        strike: {offset: {base: short_call, points: "{{wing_width}}"}}}
+
+entry:
+  trigger: {time_of_day: "09:45", tz: America/New_York}
+  filters: [{no_open_position: true}]
+
+management:
+  # A lower profit target than the strangles: ATM gamma means the favourable
+  # window closes faster, so waiting for half the credit risks giving it back.
+  - {profit_target: {pct_of_credit: "{{profit_take}}"}, action: close}
+  - {time_of_day: "15:45", action: force_flat}

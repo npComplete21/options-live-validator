@@ -1,0 +1,36 @@
+name: short_strangle_0dte
+description: >
+  The tournament baseline. Sell a 10-delta put and call expiring today.
+  Maximum edge, undefined risk: there is no wing to stop the loss, so the
+  max-loss figure used for sizing is a stop level, not a fact.
+
+params:
+  short_put_delta:  {type: float, default: 0.10, min: 0.01, max: 0.50}
+  short_call_delta: {type: float, default: 0.10, min: 0.01, max: 0.50}
+  profit_take:      {type: float, default: 0.50, min: 0.05, max: 1.0}
+
+legs:
+  - id: short_put
+    right: P
+    qty: -1
+    expiry: {dte: {target: 0, tolerance: 0}}
+    strike: {delta: "{{short_put_delta}}"}
+
+  - id: short_call
+    right: C
+    qty: -1
+    expiry: {same_as: short_put}
+    strike: {delta: "{{short_call_delta}}"}
+
+entry:
+  trigger: {time_of_day: "09:45", tz: America/New_York}
+  filters: [{no_open_position: true}]
+
+management:
+  # Take half the decay and leave: the back half is where gamma turns vicious.
+  - {profit_target: {pct_of_credit: "{{profit_take}}"}, action: close}
+  # Price levels, not delta thresholds - delta is a step function near expiry.
+  - {underlying_touch: {leg: short_put},  action: close}
+  - {underlying_touch: {leg: short_call}, action: close}
+  # Unconditional. At 15:57 ATM gamma is 11x its morning value.
+  - {time_of_day: "15:45", action: force_flat}

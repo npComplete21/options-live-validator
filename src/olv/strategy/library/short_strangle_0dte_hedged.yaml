@@ -1,0 +1,31 @@
+name: short_strangle_0dte_hedged
+description: >
+  The baseline, delta-hedged in the underlying. Answers the question an
+  unhedged short strangle cannot: a naked position bundles a volatility bet
+  with a direction bet, and the direction bet usually dominates. Hedging strips
+  it out - at a cost in adjustment slippage that this strategy exists to
+  measure, since short gamma forces every rehedge to sell low and buy high.
+
+params:
+  short_put_delta:  {type: float, default: 0.10, min: 0.01, max: 0.50}
+  short_call_delta: {type: float, default: 0.10, min: 0.01, max: 0.50}
+  delta_band:       {type: float, default: 0.15, min: 0.01, max: 1.0}
+  profit_take:      {type: float, default: 0.50, min: 0.05, max: 1.0}
+
+legs:
+  - {id: short_put,  right: P, qty: -1, expiry: {dte: {target: 0, tolerance: 0}},
+                                        strike: {delta: "{{short_put_delta}}"}}
+  - {id: short_call, right: C, qty: -1, expiry: {same_as: short_put},
+                                        strike: {delta: "{{short_call_delta}}"}}
+
+entry:
+  trigger: {time_of_day: "09:45", tz: America/New_York}
+  filters: [{no_open_position: true}]
+
+management:
+  # Portfolio-level, not per-leg: individual leg deltas stop meaning anything
+  # near expiry, but their sum is still the real directional exposure.
+  # Trades shares, never options - shares move delta and nothing else.
+  - {abs_portfolio_delta: {threshold: "{{delta_band}}"}, action: hedge_underlying}
+  - {profit_target: {pct_of_credit: "{{profit_take}}"}, action: close}
+  - {time_of_day: "15:45", action: force_flat}

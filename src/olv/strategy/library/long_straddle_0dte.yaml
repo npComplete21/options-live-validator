@@ -1,0 +1,28 @@
+name: long_straddle_0dte
+description: >
+  THE NULL HYPOTHESIS. Buy the ATM straddle and hold it to the flatten.
+  Every sign is flipped: pay theta, own gamma, want the violent move. Natenberg
+  argues this is the positive-expectancy side at 0DTE, because the model prices
+  no gap risk precisely where gamma is greatest - "you lose small, often; that
+  is the trade".
+
+  If the four short-premium strategies cannot beat this, the premium they are
+  harvesting is not real and the tournament has failed to reject the null. That
+  makes this the cheapest and most valuable member of the set.
+
+params:
+  contracts: {type: int, default: 1, min: 1}
+
+legs:
+  - {id: long_call, right: C, qty: 1, expiry: {dte: {target: 0, tolerance: 0}}, strike: {atm: }}
+  - {id: long_put,  right: P, qty: 1, expiry: {same_as: long_call},            strike: {atm: }}
+
+entry:
+  trigger: {time_of_day: "09:45", tz: America/New_York}
+  filters: [{no_open_position: true}]
+
+management:
+  # Deliberately bare. A profit target expressed as a fraction of credit is
+  # meaningless for a debit position, and any exit rule here would be a second
+  # hypothesis smuggled into the null. Buy it, hold it, flatten it.
+  - {time_of_day: "15:45", action: force_flat}

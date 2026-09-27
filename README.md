@@ -38,7 +38,7 @@ src/olv/
   common/    config, execution-mode guard, sessions, ids, Kafka topology
   feed/      vendor client, watch set, quote hygiene gate, producer
   analytics/ measured forward, implied vol and greeks from recorded quotes
-  strategy/  consumers, strategy definitions, residuals
+  strategy/  the five 0DTE tournament strategies, in the shared DSL
   broker/    paper order submission, conservative fill model
   state/     DynamoDB state, S3/Parquet archive (quotes + rejections)
   reporting/ tournament scorecard, cost decomposition, surface report
